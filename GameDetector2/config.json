@@ -1,0 +1,12 @@
+{
+    "region_mode": "auto",
+    "custom_region": {
+        "top": 0,
+        "left": 0,
+        "width": 0,
+        "height": 0
+    },
+    "accuracy": 0.9,
+    "scan_delay": 1.0,
+    "webhook": ""
+}

@@ -12,20 +12,19 @@ import keyboard
 import random
 import pydirectinput
 
-pydirectinput.PAUSE = 0
-
 GAME_TITLE = "Naraka"
 
+# ===== THRESHOLDS =====
 THRESHOLD_ENTER = 0.8
 THRESHOLD_SPECIAL = 0.85
 THRESHOLD_INGAME = 0.8
 THRESHOLD_STEP = 0.8
 THRESHOLD_VESANH = 0.7
 
-SCAN_DELAY = 0.75
-IDLE_DELAY = 1
+SCAN_DELAY = 0.4
+IDLE_DELAY = 1.0
 SPECIAL_CHECK_TIME = 20
-DOWNSCALE = 0.45
+DOWNSCALE = 0.5
 
 running = False
 
@@ -66,69 +65,51 @@ def update_volume(val):
     sound.set_volume(float(val)/100)
 
 
-# ================= HUMAN MOUSE =================
+# ================= MOUSE =================
 def human_delay():
-    time.sleep(random.uniform(0.08,0.18))
+
+    time.sleep(random.uniform(0.12,0.28))
 
 
 def micro_jitter():
 
-    if random.random() < 0.7:
+    for _ in range(random.randint(2,3)):
 
-        for _ in range(random.randint(1,3)):
+        dx = random.randint(-1,1)
+        dy = random.randint(-1,1)
 
-            dx = random.randint(-1,1)
-            dy = random.randint(-1,1)
+        x,y = pydirectinput.position()
 
-            x,y = pydirectinput.position()
+        pydirectinput.moveTo(x+dx,y+dy)
 
-            pydirectinput.moveTo(x+dx,y+dy)
-
-            time.sleep(0.01)
+        time.sleep(random.uniform(0.01,0.02))
 
 
-def move_mouse_human(x,y):
+def move_mouse_bezier(x, y):
 
-    start_x,start_y = pydirectinput.position()
+    start_x, start_y = pydirectinput.position()
 
-    distance = ((x-start_x)**2 + (y-start_y)**2)**0.5
+    # control point gần hơn → ít cong → nhanh hơn
+    control_x = (start_x + x) / 2 + random.randint(-40,40)
+    control_y = (start_y + y) / 2 + random.randint(-40,40)
 
-    steps = int(distance/12)
+    # ít bước hơn
+    steps = random.randint(10,18)
 
-    if steps < 10:
-        steps = 10
-    if steps > 35:
-        steps = 35
+    for i in range(steps):
 
-    control_x = (start_x + x)/2 + random.randint(-50,50)
-    control_y = (start_y + y)/2 + random.randint(-50,50)
+        t = i / steps
 
-    for i in range(steps+1):
-
-        t = i/steps
-
-        t = t*t*(3-2*t)
+        # acceleration curve
+        t = t*t*(3 - 2*t)
 
         bx = (1-t)**2 * start_x + 2*(1-t)*t*control_x + t**2 * x
         by = (1-t)**2 * start_y + 2*(1-t)*t*control_y + t**2 * y
 
         pydirectinput.moveTo(int(bx), int(by))
 
-        time.sleep(0.0008)
-
-
-def human_idle_move():
-
-    if random.random() < 0.2:
-
-        x,y = pydirectinput.position()
-
-        nx = x + random.randint(-20,20)
-        ny = y + random.randint(-20,20)
-
-        pydirectinput.moveTo(nx,ny)
-
-        time.sleep(random.uniform(0.02,0.05))
+        # sleep rất thấp
+        time.sleep(random.uniform(0.0005,0.001))
 
 
 def do_click(x,y):
@@ -138,13 +119,13 @@ def do_click(x,y):
 
     human_delay()
 
-    move_mouse_human(x,y)
+    move_mouse_bezier(x,y)
 
     micro_jitter()
 
     pydirectinput.mouseDown()
 
-    time.sleep(random.uniform(0.03,0.06))
+    time.sleep(random.uniform(0.04,0.08))
 
     pydirectinput.mouseUp()
 
@@ -157,7 +138,7 @@ def do_space():
 
     keyboard.press_and_release("space")
 
-    time.sleep(random.uniform(0.4,0.8))
+    time.sleep(random.uniform(0.5,1.0))
 
 
 # ================= LOAD TEMPLATE =================
@@ -191,9 +172,11 @@ def load_templates(folder,named=False):
 # ================= DETECT =================
 def match_any(gray,templates):
 
+    small=cv2.resize(gray,None,fx=DOWNSCALE,fy=DOWNSCALE)
+
     for img in templates:
 
-        if cv2.matchTemplate(gray,img,cv2.TM_CCOEFF_NORMED).max()>=THRESHOLD_ENTER:
+        if cv2.matchTemplate(small,img,cv2.TM_CCOEFF_NORMED).max()>=THRESHOLD_ENTER:
             return True
 
     return False
@@ -201,12 +184,14 @@ def match_any(gray,templates):
 
 def match_named(gray,templates):
 
+    small=cv2.resize(gray,None,fx=DOWNSCALE,fy=DOWNSCALE)
+
     best_val=0
     best_name=""
 
     for name,img in templates:
 
-        val=cv2.matchTemplate(gray,img,cv2.TM_CCOEFF_NORMED).max()
+        val=cv2.matchTemplate(small,img,cv2.TM_CCOEFF_NORMED).max()
 
         if val>best_val:
             best_val=val
@@ -218,14 +203,15 @@ def match_named(gray,templates):
 def find_template(sct,region,template,threshold):
 
     frame=np.array(sct.grab(region))
-
-    gray=cv2.cvtColor(frame[:,:,:3],cv2.COLOR_BGR2GRAY)
+    gray=cv2.cvtColor(frame,cv2.COLOR_BGR2GRAY)
 
     small=cv2.resize(gray,None,fx=DOWNSCALE,fy=DOWNSCALE)
 
     result=cv2.matchTemplate(small,template,cv2.TM_CCOEFF_NORMED)
 
     _,max_val,_,max_loc=cv2.minMaxLoc(result)
+
+    add_log(f"Template match: {round(max_val,3)}")
 
     if max_val>=threshold:
 
@@ -239,6 +225,22 @@ def find_template(sct,region,template,threshold):
     return None
 
 
+def wait_image(sct,region,template,threshold,timeout=20):
+
+    start=time.time()
+
+    while time.time()-start<timeout:
+
+        pos=find_template(sct,region,template,threshold)
+
+        if pos:
+            return pos
+
+        time.sleep(SCAN_DELAY)
+
+    return None
+
+
 # ================= STEPS =================
 def run_steps(sct,region,steps):
 
@@ -248,14 +250,13 @@ def run_steps(sct,region,steps):
 
         action=step["action"]
         template=step["template"]
-        delay=step.get("delay",1)
 
         add_log(f"Step {i}: waiting template")
 
         if i==1:
-            pos=find_template(sct,region,template,THRESHOLD_VESANH)
+            pos=wait_image(sct,region,template,THRESHOLD_VESANH)
         else:
-            pos=find_template(sct,region,template,THRESHOLD_STEP)
+            pos=wait_image(sct,region,template,THRESHOLD_STEP)
 
         if not pos and action!="space":
             add_log(f"Step {i}: template not found")
@@ -272,16 +273,21 @@ def run_steps(sct,region,steps):
 
             if i==5:
 
-                add_log("Step 5 extra SPACE after 3s")
+                add_log("Step 5 extra SPACE after 2s")
 
-                time.sleep(3)
+                time.sleep(2)
 
-                do_space()
+                do_space()  
 
         add_log(f"Step {i}: done")
 
-        add_log(f"Step {i} delay {delay}s")
-        time.sleep(random.uniform(delay, delay+0.5))
+        if i==2:
+
+            add_log("Step 2 delay 25 seconds")
+
+            time.sleep(25)
+
+        time.sleep(random.uniform(0.5,1.2))
 
     add_log("=== Automation steps finished ===")
 
@@ -331,16 +337,15 @@ def detector_loop(status_label):
 
     steps=[
 
-    {"action":"click","template":step_templates[0][1], "delay":1},
-    {"action":"space","template":step_templates[1][1], "delay":25},
-    {"action":"space","template":step_templates[2][1], "delay":2},
-    {"action":"space","template":step_templates[3][1], "delay":2},
-    {"action":"space","template":step_templates[4][1], "delay":2},
-    {"action":"click","template":step_templates[5][1], "delay":1},
-    {"action":"click","template":step_templates[6][1], "delay":1},
-    {"action":"click","template":step_templates[7][1], "delay":1},
-    {"action":"click","template":step_templates[8][1], "delay":1},
-
+        {"action":"click","template":step_templates[0][1]},
+        {"action":"space","template":step_templates[1][1]},
+        {"action":"space","template":step_templates[2][1]},
+        {"action":"space","template":step_templates[3][1]},
+        {"action":"space","template":step_templates[4][1]},
+        {"action":"click","template":step_templates[5][1]},
+        {"action":"click","template":step_templates[6][1]},
+        {"action":"click","template":step_templates[7][1]},
+        {"action":"click","template":step_templates[8][1]},
     ]
 
     status_label.config(text="Running")
@@ -350,14 +355,9 @@ def detector_loop(status_label):
         while running:
 
             frame=np.array(sct.grab(region))
+            gray=cv2.cvtColor(frame,cv2.COLOR_BGR2GRAY)
 
-            gray=cv2.cvtColor(frame[:,:,:3],cv2.COLOR_BGR2GRAY)
-
-            small=cv2.resize(gray,None,fx=DOWNSCALE,fy=DOWNSCALE)
-
-            if not match_any(small,enter_templates):
-
-                human_idle_move()
+            if not match_any(gray,enter_templates):
 
                 time.sleep(IDLE_DELAY)
                 continue
@@ -370,12 +370,9 @@ def detector_loop(status_label):
             while time.time()-start<SPECIAL_CHECK_TIME:
 
                 frame=np.array(sct.grab(region))
+                gray=cv2.cvtColor(frame,cv2.COLOR_BGR2GRAY)
 
-                gray=cv2.cvtColor(frame[:,:,:3],cv2.COLOR_BGR2GRAY)
-
-                small=cv2.resize(gray,None,fx=DOWNSCALE,fy=DOWNSCALE)
-
-                name,val=match_named(small,special_templates)
+                name,val=match_named(gray,special_templates)
 
                 if val>=THRESHOLD_SPECIAL:
 
@@ -387,26 +384,21 @@ def detector_loop(status_label):
                     special=True
                     break
 
-                human_idle_move()
-
                 time.sleep(SCAN_DELAY)
 
             if special:
                 break
 
-            time.sleep(8)
+            time.sleep(10)
 
             confirm=0
 
             while running:
 
                 frame=np.array(sct.grab(region))
+                gray=cv2.cvtColor(frame,cv2.COLOR_BGR2GRAY)
 
-                gray=cv2.cvtColor(frame[:,:,:3],cv2.COLOR_BGR2GRAY)
-
-                small=cv2.resize(gray,None,fx=DOWNSCALE,fy=DOWNSCALE)
-
-                name,val=match_named(small,ingame_templates)
+                name,val=match_named(gray,ingame_templates)
 
                 if val>=THRESHOLD_INGAME:
                     confirm+=1
@@ -432,8 +424,6 @@ def detector_loop(status_label):
                     add_log("Waiting next match")
 
                     break
-
-                human_idle_move()
 
                 time.sleep(SCAN_DELAY)
 
@@ -465,6 +455,7 @@ def stop_scan():
 root=tk.Tk()
 
 root.title("Game Detector")
+
 root.geometry("600x420")
 
 tk.Label(root,text="Game Detector",font=("Arial",12)).pack(pady=4)
