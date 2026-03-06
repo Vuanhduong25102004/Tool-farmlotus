@@ -1,0 +1,14 @@
+{
+    "webhook_url": "https://ptb.discord.com/api/webhooks/1477591987086561432/pOksLObHGRtAGg5dZqtnJj5uVAOjOrYmOFS1we93xNpMPU8e-hBqEt_tOUf6xV8PmOB_",
+    "threshold": 0.9,
+    "cooldown": 10.0,
+    "region": {
+        "rel_left": 875,
+        "rel_top": 33,
+        "width": 413,
+        "height": 688
+    },
+    "game_title": "Naraka",
+    "scan_delay": 2.0,
+    "downscale": 1.0
+}
