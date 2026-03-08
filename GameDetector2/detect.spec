@@ -5,7 +5,7 @@ a = Analysis(
     ['detect.py'],
     pathex=[],
     binaries=[],
-    datas=[('templates_enter', 'templates_enter'), ('templates_special', 'templates_special'), ('templates_ingame', 'templates_ingame'), ('templates_steps', 'templates_steps'), ('alert.mp3', '.')],
+    datas=[('templates_enter', 'templates_enter'), ('templates_ingame', 'templates_ingame'), ('templates_skip', 'templates_skip'), ('templates_special', 'templates_special'), ('templates_steps', 'templates_steps')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
