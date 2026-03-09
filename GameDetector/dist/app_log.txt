@@ -213,3 +213,44 @@
 [19:47:14] 🎯 Phát hiện 'sen' (97.4%)
 [21:26:18] ⚠️ Mất kết nối khung hình đột ngột. Tự động dừng.
 [21:26:18] ⏹️ Đã dừng.
+[00:05:29] Đang tìm cửa sổ game...
+[00:05:29] ✅ Đã tải 1 ảnh mẫu (Độ phân giải 100%).
+[00:05:29] ▶️ Bắt đầu quét...
+[00:27:21] 🎯 Phát hiện 'sen' (98.3%)
+[01:14:14] 🎯 Phát hiện 'sen' (98.1%)
+[01:54:32] ⚠️ Game đã bị tắt. Tự động dừng tool.
+[01:54:32] ⏹️ Đã dừng.
+[13:48:33] Hệ thống khởi động thành công.
+[13:49:12] Đang tìm cửa sổ game...
+[13:49:13] ✅ Đã tải 1 ảnh mẫu (Độ phân giải 100%).
+[13:49:13] ▶️ Bắt đầu quét...
+[15:23:32] 🎯 Phát hiện 'sen' (98.0%)
+[16:43:47] 🎯 Phát hiện 'sen' (95.6%)
+[19:32:42] 🎯 Phát hiện 'sen' (96.5%)
+[20:00:03] 🎯 Phát hiện 'sen' (97.5%)
+[20:29:12] 🎯 Phát hiện 'sen' (98.3%)
+[00:21:22] 🎯 Phát hiện 'sen' (98.2%)
+[00:48:26] 🎯 Phát hiện 'sen' (95.0%)
+[01:52:01] ⚠️ Mất kết nối khung hình đột ngột. Tự động dừng.
+[01:52:01] ⏹️ Đã dừng.
+[10:07:48] Hệ thống khởi động thành công.
+[10:08:20] Đang tìm cửa sổ game...
+[10:08:20] ✅ Đã tải 1 ảnh mẫu (Độ phân giải 100%).
+[10:08:20] ▶️ Bắt đầu quét...
+[10:08:32] ⏹️ Đã dừng.
+[10:08:32] Đang tìm cửa sổ game...
+[10:08:32] ✅ Đã tải 1 ảnh mẫu (Độ phân giải 100%).
+[10:08:32] ▶️ Bắt đầu quét...
+[11:50:31] 🎯 Phát hiện 'sen' (97.8%)
+[12:26:47] ⏹️ Đã dừng.
+[19:31:37] Hệ thống khởi động thành công.
+[19:31:39] Đang tìm cửa sổ game...
+[19:31:39] ✅ Đã tải 1 ảnh mẫu (Độ phân giải 100%).
+[19:31:39] ▶️ Bắt đầu quét...
+[19:47:05] 🎯 Phát hiện 'sen' (97.8%)
+[22:54:35] Hệ thống khởi động thành công.
+[22:54:37] Đang tìm cửa sổ game...
+[22:54:37] ✅ Đã tải 1 ảnh mẫu (Độ phân giải 100%).
+[22:54:37] ▶️ Bắt đầu quét...
+[23:09:50] ⚠️ Mất kết nối khung hình đột ngột. Tự động dừng.
+[23:09:50] ⏹️ Đã dừng.
