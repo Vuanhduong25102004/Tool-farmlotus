@@ -1,4 +1,4 @@
-﻿import cv2
+import cv2
 import numpy as np
 import mss
 import os
@@ -10,39 +10,35 @@ import keyboard
 import random
 import pydirectinput
 import json
-import requests
-import customtkinter as ctk
+import qtawesome as qta
+import config_mgr
 
-# --- THÊM PYGAME VÀ KHỞI TẠO MIXER ---
-import os
-os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = "hide" # Ẩn dòng chữ chào mừng của pygame
-import pygame
-pygame.mixer.init()
+from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+                             QLabel, QPushButton, QLineEdit, QFrame, QSlider, QTextEdit, QGridLayout, QCheckBox)
+from PyQt6.QtCore import Qt, QObject, pyqtSignal, QTimer
+from PyQt6.QtGui import QFont, QIcon, QPainter, QColor
+from vision import load_templates, match_any, match_named, find_template, DOWNSCALE
 
 GAME_TITLE = "Naraka"
 
 # ===== THRESHOLDS =====
-THRESHOLD_ENTER = 0.8
-THRESHOLD_SPECIAL = 0.85
-THRESHOLD_INGAME = 0.8
-THRESHOLD_STEP = 0.7
-THRESHOLD_VESANH = 0.7
-
-SCAN_DELAY = 0.5
-IDLE_DELAY = 1.0
-SPECIAL_CHECK_TIME = 20
-DOWNSCALE = 0.5
+THRESHOLD_ENTER = 0.8; THRESHOLD_SPECIAL = 0.85; THRESHOLD_INGAME = 0.8
+THRESHOLD_STEP = 0.7; THRESHOLD_VESANH = 0.7
+SCAN_DELAY = 0.5; IDLE_DELAY = 1.0; SPECIAL_CHECK_TIME = 20
 
 running = False
 scan_thread = None
-
+start_time = None
 
 # ================= PATH =================
 def resource_path(relative):
-    if getattr(sys, 'frozen', False):
-        base = sys._MEIPASS
-    else:
-        base = os.path.abspath(".")
+    if getattr(sys, 'frozen', False): base = os.path.dirname(sys.executable)
+    else: base = os.path.abspath(".")
+    return os.path.join(base, relative)
+
+def internal_path(relative):
+    if getattr(sys, 'frozen', False): base = sys._MEIPASS
+    else: base = os.path.abspath(".")
     return os.path.join(base, relative)
 
 ENTER_FOLDER = resource_path("templates_enter")
@@ -51,347 +47,203 @@ INGAME_FOLDER = resource_path("templates_ingame")
 STEPS_FOLDER = resource_path("templates_steps")
 AUDIO_FILE = resource_path("alert.mp3") 
 
+# ================= CONFIG =================
+config = config_mgr.load_config()
 
-# ================= CONFIG & WEBHOOK =================
-CONFIG_FILE = "config.json"
-default_config = {"webhook": "", "play_sound": True, "sound_volume": 0.5}
+# ================= GIAO TIẾP LUỒNG (THREAD SIGNALS) =================
+class Signals(QObject):
+    log = pyqtSignal(str, str)
+    status = pyqtSignal(str, str, str, str)
+    telemetry = pyqtSignal(int, int, int, int)
+    sound_btn = pyqtSignal(bool)
+    trigger_start = pyqtSignal()
+    trigger_stop = pyqtSignal()
 
-def load_config():
-    if not os.path.exists(CONFIG_FILE):
-        with open(CONFIG_FILE, "w") as f:
-            json.dump(default_config, f, indent=4)
-        return default_config
-    try:
-        with open(CONFIG_FILE, "r") as f:
-            loaded_config = json.load(f)
-            if "play_sound" not in loaded_config:
-                loaded_config["play_sound"] = True
-            if "sound_volume" not in loaded_config:
-                loaded_config["sound_volume"] = 0.5
-            return loaded_config
-    except:
-        return default_config
+c = Signals()
 
-def save_config(*args):
-    config["webhook"] = webhook_entry.get()
-    config["play_sound"] = sound_switch_var.get() == 1
-    config["sound_volume"] = volume_slider.get() 
-    with open(CONFIG_FILE, "w") as f:
-        json.dump(config, f, indent=4)
+def add_log(msg, level="INFO"):
+    c.log.emit(level, msg)
 
-config = load_config()
+# ================= ÂM THANH & WEBHOOK =================
+from notifier import NotifierManager
+notif = NotifierManager(AUDIO_FILE)
 
 def send_webhook(name, percent):
-    url = webhook_entry.get()
-    if not url:
-        return
-    now = time.strftime("%H:%M:%S")
-    data = {
-        "embeds": [{
-            "title": "🚨 ALERT",
-            "description": f"Phát hiện **{name}** ({percent}%)",
-            "color": 16711680,
-            "footer": {"text": f"Time: {now}"}
-        }]
-    }
-    try:
-        requests.post(url, json=data, timeout=3)
-    except Exception as e:
-        add_log(f"Lỗi gửi Webhook: {e}")
+    notif.send_webhook(config.get("webhook", ""), name, percent, add_log)
 
-# ================= QUẢN LÝ ÂM THANH =================
 def play_alert(loop=True, force=False):
-    # force=True dùng cho nút Test (để bỏ qua công tắc bật/tắt)
-    if sound_switch_var.get() == 0 and not force:
-        return
-
-    try:
-        if os.path.exists(AUDIO_FILE):
-            if not pygame.mixer.music.get_busy():
-                pygame.mixer.music.load(AUDIO_FILE)
-                pygame.mixer.music.set_volume(volume_slider.get())
-                # loops=-1 sẽ lặp vô hạn như báo thức
-                pygame.mixer.music.play(loops=-1 if loop else 0)
-                app.after(0, lambda: test_sound_btn.configure(text="🔇 Tắt Âm Thanh", fg_color="#be123c", hover_color="#9f1239"))
-        else:
-            add_log("⚠ LỖI: Không tìm thấy file 'alert.mp3'!")
-    except Exception as e:
-        add_log(f"Không thể phát âm thanh: {e}")
+    if not config.get("play_sound", True) and not force: return
+    notif.play_sound(config.get("sound_volume", 50), loop, c.sound_btn.emit)
 
 def stop_alert():
-    try:
-        if pygame.mixer.music.get_busy():
-            pygame.mixer.music.stop()
-        app.after(0, lambda: test_sound_btn.configure(text="🎵 Thử Âm Thanh", fg_color="#475569", hover_color="#64748b"))
-    except:
-        pass
+    notif.stop_sound(c.sound_btn.emit)
 
 def toggle_sound():
-    if pygame.mixer.music.get_busy():
+    if notif.is_playing():
         stop_alert()
-        add_log("Đã tắt âm báo.")
+        add_log("Alert sound disabled.", "OK")
     else:
-        add_log("Đang test âm báo (Lặp vô hạn)...")
+        add_log("Testing alert sound...", "INFO")
         play_alert(loop=True, force=True)
 
 def test_webhook():
-    save_config()
-    add_log("Đang gửi test Webhook...")
-    send_webhook("✅ Hệ thống Game Detector Pro đã kết nối!", 100)
-    add_log("Đã test xong Webhook.")
-
+    add_log("Sending Webhook test...", "INFO")
+    send_webhook("Webhook ok", 100)
+    add_log("Webhook test sent.", "OK")
 
 # ================= MOUSE & MACRO =================
-def human_delay():
-    time.sleep(random.uniform(0.12, 0.28))
-
 def smart_sleep(duration):
-    """Ngủ nhưng liên tục kiểm tra nút Stop để thoát ngay lập tức"""
     end_time = time.time() + duration
     while time.time() < end_time:
-        if not running:
-            break
+        if not running: break
         time.sleep(0.1)
 
-def micro_jitter():
-    for _ in range(random.randint(2, 3)):
-        dx = random.randint(-1, 1)
-        dy = random.randint(-1, 1)
-        x, y = pydirectinput.position()
-        pydirectinput.moveTo(x + dx, y + dy)
-        time.sleep(random.uniform(0.01, 0.02))
-
-def move_mouse_bezier(x, y):
-    start_x, start_y = pydirectinput.position()
-    control_x = (start_x + x) / 2 + random.randint(-40, 40)
-    control_y = (start_y + y) / 2 + random.randint(-40, 40)
-    steps = random.randint(10, 18)
-    for i in range(steps):
-        t = i / steps
-        t = t * t * (3 - 2 * t)
-        bx = (1 - t)**2 * start_x + 2 * (1 - t) * t * control_x + t**2 * x
-        by = (1 - t)**2 * start_y + 2 * (1 - t) * t * control_y + t**2 * y
-        pydirectinput.moveTo(int(bx), int(by))
-        time.sleep(random.uniform(0.0005, 0.001))
-
 def do_click(x, y):
-    x += random.randint(-2, 2)
-    y += random.randint(-2, 2)
-    human_delay()
-    move_mouse_bezier(x, y)
-    micro_jitter()
+    pydirectinput.moveTo(x, y)
     pydirectinput.mouseDown()
-    time.sleep(random.uniform(0.04, 0.08))
+    time.sleep(random.uniform(0.03, 0.06))
     pydirectinput.mouseUp()
 
 def do_space():
-    add_log("Press SPACE")
-    human_delay()
+    add_log("Press SPACE", "SYS")
     keyboard.press_and_release("space")
     time.sleep(random.uniform(0.5, 1.0))
 
-
-# ================= LOAD TEMPLATE =================
-def load_templates(folder, named=False):
-    arr = []
-    if not os.path.exists(folder):
-        return arr
-    for f in sorted(os.listdir(folder)):
-        if not f.lower().endswith((".png", ".jpg")):
-            continue
-        img = cv2.imread(os.path.join(folder, f), cv2.IMREAD_COLOR)
-        if img is None:
-            continue
-        img = cv2.resize(img, None, fx=DOWNSCALE, fy=DOWNSCALE)
-        if named:
-            arr.append((f, img))
-        else:
-            arr.append(img)
-    return arr
-
-
-# ================= DETECT =================
-def match_any(small_bgr, templates):
-    for img in templates:
-        if cv2.matchTemplate(small_bgr, img, cv2.TM_CCOEFF_NORMED).max() >= THRESHOLD_ENTER:
-            return True
-    return False
-
-def match_named(small_bgr, templates):
-    best_val = 0
-    best_name = ""
-    for name, img in templates:
-        val = cv2.matchTemplate(small_bgr, img, cv2.TM_CCOEFF_NORMED).max()
-        if val > best_val:
-            best_val = val
-            best_name = name
-    return best_name, best_val
-
-def find_template(small_bgr, region, template, threshold):
-    result = cv2.matchTemplate(small_bgr, template, cv2.TM_CCOEFF_NORMED)
-    _, max_val, _, max_loc = cv2.minMaxLoc(result)
-    if max_val >= threshold:
-        h, w = template.shape[:2] 
-        x = region["left"] + int((max_loc[0] + w // 2) / DOWNSCALE)
-        y = region["top"] + int((max_loc[1] + h // 2) / DOWNSCALE)
-        return x, y
-    return None
-
+# ================= DETECT LOGIC =================
 def wait_image(sct, game, template, threshold, timeout=20):
     start = time.time()
     while time.time() - start < timeout and running:
-        try:
-            region = {"top": game.top, "left": game.left, "width": game.width, "height": game.height}
-        except Exception:
-            time.sleep(SCAN_DELAY)
-            continue
+        try: region = {"top": game.top, "left": game.left, "width": game.width, "height": game.height}
+        except: time.sleep(SCAN_DELAY); continue
         frame = np.array(sct.grab(region))
         bgr_frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
         small_bgr = cv2.resize(bgr_frame, None, fx=DOWNSCALE, fy=DOWNSCALE)
         pos = find_template(small_bgr, region, template, threshold)
-        if pos:
-            return pos
+        if pos: return pos
         time.sleep(SCAN_DELAY)
     return None
 
-
-# ================= STEPS =================
 def run_steps(sct, game, steps):
-    add_log("=== Automation steps start ===")
+    add_log("=== Automation ===", "SYS")
     for i, step in enumerate(steps, start=1):
-        if not running:
-            break
+        if not running: break
+        action, template, img_name = step["action"], step["template"], step["name"]
+        clean_name = img_name.replace(".png", "").replace(".jpg", "") 
+        add_log(f"Step {i}: Waiting for [{clean_name}]...", "SYS")
         
-        action = step["action"]
-        template = step["template"]
-        add_log(f"Step {i}: waiting template")
+        # Xác định mức độ chính xác (Threshold) cho bước này
+        threshold = THRESHOLD_VESANH if i == 1 else THRESHOLD_STEP
+        pos = None
+        
+        # Cơ chế chờ ảnh xuất hiện
+        while pos is None and running:
+            pos = wait_image(sct, game, template, threshold, timeout=10)
+            if not pos:
+                add_log(f"Step {i}: [{clean_name}] not found, keep waiting...", "WARN")
 
-        if i == 1:
-            pos = wait_image(sct, game, template, THRESHOLD_VESANH)
-        else:
-            pos = wait_image(sct, game, template, THRESHOLD_STEP)
+        if not running: break
 
-        # Bắt buộc PHẢI TÌM THẤY ẢNH (pos có giá trị) thì mới đi tiếp.
-        if not pos:
-            add_log(f"Step {i}: template not found (Timeout)")
-            continue
-
+        # Thực hiện hành động khi đã tìm thấy ảnh
         if action == "click":
             x, y = pos
             do_click(x, y)
         elif action == "space":
             do_space()
             if i == 5:
-                add_log("Step 5 extra SPACE after 2s")
-                smart_sleep(2)
-                if not running: 
-                    break # Thoát ngay nếu ấn Dừng lúc đang đợi 2s
+                add_log("Step 5: SPACE 2nd time (after 1s)", "SYS")
+                smart_sleep(1)
+                if not running: break
                 do_space()  
 
-        add_log(f"Step {i}: done")
-        if i == 2:
-            add_log("Step 2 delay 25 seconds")
-            smart_sleep(25)
-            if not running: 
-                break # Thoát ngay nếu ấn Dừng lúc đang chờ 25s
-            
-        # THÊM ĐỘ TRỄ CHUẨN: Tăng thời gian chờ mặc định sau mỗi bước để game load kịp
+                add_log("Step 5: SPACE 3nd time (after 0.5s)", "SYS")
+                smart_sleep(0.5)
+                if not running: break
+                do_space()  
+
+        add_log(f"Step {i}: done", "OK")
+        
         smart_sleep(random.uniform(0.5, 1.2))
         
-    add_log("=== Automation steps finished ===")
+    add_log("Finished", "SYS")
 
-
-# ================= LOG =================
-def add_log(msg):
-    now = time.strftime("%H:%M:%S")
-    def write():
-        log_box.configure(state="normal")
-        lines = log_box.get("1.0", "end").splitlines()
-        if len(lines) >= 30: 
-            log_box.delete("1.0", "2.0")
-        log_box.insert("end", f"[{now}] ", "time")
-        log_box.insert("end", f"{msg}\n", "msg")
-        log_box.see("end")
-        log_box.configure(state="disabled")
-    app.after(0, write)
-
-def update_status(text, color):
-    app.after(0, lambda: status_indicator.configure(text=text, text_color=color))
-
-
-# ================= DETECTOR =================
-def detector_loop(status_label):
-    global running
-
+# ================= LOOP CHÍNH =================
+def detector_loop():
+    global running, start_time
     windows = gw.getWindowsWithTitle(GAME_TITLE)
     game = None
 
     for w in windows:
+        # Bỏ qua ngay lập tức nếu tên cửa sổ có dính chữ Discord, Chrome, Edge...
+        if "Discord" in w.title or "Chrome" in w.title or "Edge" in w.title:
+            continue
+            
         if w.width > 800 and w.height > 600: 
             game = w
             break
 
     if not game:
-        update_status("🔴 KHÔNG TÌM THẤY GAME", "#ef4444")
-        add_log("Lỗi: Không tìm thấy cửa sổ game hợp lệ.")
+        c.status.emit("KHÔNG TÌM THẤY GAME", "#ef4444", "Idle", "#8a9199")
+        add_log("Error: Valid game window not found.", "ERR")
         running = False
         return
 
-    add_log(f"Game detected ({game.title}) tại X:{game.left}, Y:{game.top}")
-    app.after(0, lambda: coord_label.configure(text=f"X: {game.left} | Y: {game.top}\nSize: {game.width}x{game.height}"))
+    add_log(f"({game.title}), X:{game.left}, Y:{game.top}", "OK")
+    c.telemetry.emit(game.left, game.top, game.width, game.height)
 
-    enter_templates = load_templates(ENTER_FOLDER)
+    enter_templates = load_templates(ENTER_FOLDER, True)
     special_templates = load_templates(SPECIAL_FOLDER, True)
     ingame_templates = load_templates(INGAME_FOLDER, True)
     step_templates = load_templates(STEPS_FOLDER, True)
 
     if len(step_templates) < 9:
-        add_log("CẢNH BÁO: Thiếu ảnh template trong STEPS_FOLDER")
-        update_status("🔴 LỖI TEMPLATE", "#ef4444")
+        add_log("WARNING: Missing templates in STEPS_FOLDER", "ERR")
+        c.status.emit("🔴 LỖI TEMPLATE", "#ef4444", "Idle", "#8a9199")
         running = False
         return
 
     steps = [
-        {"action": "click", "template": step_templates[0][1]},
-        {"action": "space", "template": step_templates[1][1]},
-        {"action": "space", "template": step_templates[2][1]},
-        {"action": "space", "template": step_templates[3][1]},
-        {"action": "space", "template": step_templates[4][1]},
-        {"action": "click", "template": step_templates[5][1]},
-        {"action": "click", "template": step_templates[6][1]},
-        {"action": "click", "template": step_templates[7][1]},
-        {"action": "click", "template": step_templates[8][1]},
+        {"action": "click", "name": step_templates[0][0], "template": step_templates[0][1]},
+        {"action": "space", "name": step_templates[1][0], "template": step_templates[1][1]},
+        {"action": "space", "name": step_templates[2][0], "template": step_templates[2][1]},
+        {"action": "space", "name": step_templates[3][0], "template": step_templates[3][1]},
+        {"action": "space", "name": step_templates[4][0], "template": step_templates[4][1]},
+        {"action": "click", "name": step_templates[5][0], "template": step_templates[5][1]},
+        {"action": "click", "name": step_templates[6][0], "template": step_templates[6][1]},
+        {"action": "click", "name": step_templates[7][0], "template": step_templates[7][1]},
+        {"action": "click", "name": step_templates[8][0], "template": step_templates[8][1]},
     ]
 
-    update_status("🟢 HỆ THỐNG ĐANG QUÉT...", "#10b981")
+    c.status.emit("ĐANG THEO DÕI...", "#10b981", "Tracking", "#10b981")
+
+    special = False
 
     with mss.mss() as sct:
         while running:
             try:
                 region = {"top": game.top, "left": game.left, "width": game.width, "height": game.height}
-                app.after(0, lambda r=region: coord_label.configure(text=f"X: {r['left']} | Y: {r['top']}\nSize: {r['width']}x{r['height']}"))
+                c.telemetry.emit(region['left'], region['top'], region['width'], region['height'])
             except Exception as e:
-                add_log(f"Cảnh báo: Lỗi cập nhật toạ độ game: {e}")
-                time.sleep(1)
+                add_log(f"Lỗi chụp màn hình/đọc tọa độ: {e}", "ERR")
+                smart_sleep(1)
                 continue
 
             frame = np.array(sct.grab(region))
             bgr_frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
             small_bgr = cv2.resize(bgr_frame, None, fx=DOWNSCALE, fy=DOWNSCALE)
 
-            if not match_any(small_bgr, enter_templates):
+            name, val = match_named(small_bgr, enter_templates)
+            if val < THRESHOLD_ENTER:
                 time.sleep(IDLE_DELAY)
                 continue
 
-            add_log("Loading detected")
+            clean_name = name.replace(".png", "").replace(".jpg", "")
+            add_log(f"Loading detected via [{clean_name}]", "INFO")
             start = time.time()
             special = False
 
             while time.time() - start < SPECIAL_CHECK_TIME and running:
-                try:
-                    region = {"top": game.top, "left": game.left, "width": game.width, "height": game.height}
-                except:
-                    pass
+                try: region = {"top": game.top, "left": game.left, "width": game.width, "height": game.height}
+                except: pass
 
                 frame = np.array(sct.grab(region))
                 bgr_frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
@@ -401,32 +253,27 @@ def detector_loop(status_label):
 
                 if val >= THRESHOLD_SPECIAL:
                     clean_name = name.replace(".png", "").replace(".jpg", "")
-                    percent = round(val * 100, 1)
+                    percent = round(val * 100)
 
-                    add_log(f"DETECTOR PRO: Phát hiện '{clean_name}' ({percent}%)")
+                    add_log(f"Reng Reng'{clean_name}' ({percent}%)", "ALERT")
                     send_webhook(clean_name, percent)
-                    
-                    # === BÁO ĐỘNG SPECIAL (LẶP VÔ HẠN) ===
                     play_alert(loop=True)
                     
-                    update_status("🟡 DỪNG: TÌM THẤY SPECIAL", "#f59e0b")
+                    c.status.emit("DỪNG: TÌM THẤY SPECIAL", "#f59e0b", "Idle", "#8a9199")
                     running = False
                     special = True
                     break
 
                 time.sleep(SCAN_DELAY)
 
-            if special:
-                break
+            if special: break
 
-            time.sleep(10)
+            smart_sleep(10)
             confirm = 0
 
             while running:
-                try:
-                    region = {"top": game.top, "left": game.left, "width": game.width, "height": game.height}
-                except:
-                    pass
+                try: region = {"top": game.top, "left": game.left, "width": game.width, "height": game.height}
+                except: pass
                 
                 frame = np.array(sct.grab(region))
                 bgr_frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
@@ -434,174 +281,330 @@ def detector_loop(status_label):
                 
                 name, val = match_named(small_bgr, ingame_templates)
 
-                if val >= THRESHOLD_INGAME:
-                    confirm += 1
-                else:
-                    confirm = 0
+                if val >= THRESHOLD_INGAME: confirm += 1
+                else: confirm = 0
 
                 if confirm >= 3:
-                    add_log("Ingame confirmed")
-                    try:
-                        game.activate()
-                    except Exception as e:
-                        add_log(f"Lỗi khi focus game: {e}")
+                    clean_name = name.replace(".png", "").replace(".jpg", "")
+                    add_log(f"Ingame confirmed via [{clean_name}]", "OK")
+                    try: game.activate()
+                    except: pass
 
                     time.sleep(0.5)
                     keyboard.press_and_release("esc")
-                    add_log("ESC sent")
-                    time.sleep(1.5)
+                    add_log("ESC sent", "SYS")
+                    smart_sleep(1.5)
                     run_steps(sct, game, steps)
-                    add_log("Waiting next match")
+                    add_log("Waiting next match", "INFO")
                     break
 
                 time.sleep(SCAN_DELAY)
 
     if not special:
-        update_status("🔴 HỆ THỐNG ĐÃ DỪNG", "#ef4444")
+        c.status.emit("Hệ thống sẵn sàng", "#e6e8eb", "Idle", "#8a9199")
     running = False
+    start_time = None
 
-
-# ================= GUI CONTROLS =================
 def start_scan():
-    global running, scan_thread
-    save_config()
-    
-    # KIỂM TRA: Nếu luồng cũ vẫn đang sống thì không cho bật luồng mới
+    global running, scan_thread, start_time
     if scan_thread and scan_thread.is_alive():
-        add_log("⚠ Luồng cũ chưa tắt hẳn. Vui lòng đợi 1 giây rồi bấm lại!")
+        add_log("Old thread shutting down. Wait 1s!", "WARN")
         return
-        
     if not running:
         running = True
-        update_status("🔄 ĐANG KHỞI ĐỘNG...", "#3b82f6")
-        scan_thread = threading.Thread(
-            target=lambda: detector_loop(None),
-            daemon=True
-        )
+        start_time = time.time()
+        scan_thread = threading.Thread(target=detector_loop, daemon=True)
         scan_thread.start()
 
 def stop_scan():
-    global running
+    global running, start_time
     running = False
-    stop_alert() # Tắt báo thức nếu đang kêu
-    update_status("🔴 HỆ THỐNG ĐÃ DỪNG", "#ef4444")
-    add_log("Bot stopped by user")
+    stop_alert()
+    c.status.emit("Hệ thống sẵn sàng", "#e6e8eb", "Idle", "#8a9199")
+    add_log("Bot stopped by user", "WARN")
 
 
-# ================= SETUP GUI =================
-ctk.set_appearance_mode("Dark")
+# ================= ĐỌC FILE GIAO DIỆN (QSS) =================
+def load_theme():
+    theme_path = internal_path("theme.qss") 
+    if os.path.exists(theme_path):
+        with open(theme_path, "r", encoding="utf-8") as f:
+            return f.read()
+    else:
+        add_log("Warning: theme.qss not found", "WARN")
+        return ""
 
-BG_COLOR = "#0f172a"          
-SIDEBAR_COLOR = "#1e293b"     
-CARD_COLOR = "#334155"        
-TEXT_COLOR = "#f8fafc"        
-ACCENT_BLUE = "#38bdf8"       
-ACCENT_GREEN = "#10b981"      
-ACCENT_RED = "#ef4444"        
-TERMINAL_BG = "#020617"       
-TERMINAL_TEXT = "#4ade80"     
+QSS = load_theme()
+# ================= CUSTOM WIDGETS =================
+class ToggleSwitch(QCheckBox):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(40, 22)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
 
-app = ctk.CTk()
-app.title("Game Detector Pro")
-app.geometry("850x580") 
-app.configure(fg_color=BG_COLOR)
-app.resizable(False, False)
+    def paintEvent(self, e):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setPen(Qt.PenStyle.NoPen)
+        
+        # Vẽ hình nền
+        if self.isChecked():
+            p.setBrush(QColor("#22d3ee"))
+        else:
+            p.setBrush(QColor("#1f242b"))
+        p.drawRoundedRect(0, 0, self.width(), self.height(), 11, 11)
+        
+        # Vẽ nút tròn
+        p.setBrush(QColor("#ffffff"))
+        if self.isChecked():
+            p.drawEllipse(self.width() - 20, 2, 18, 18)
+        else:
+            p.drawEllipse(2, 2, 18, 18)
+        p.end()
 
-app.grid_columnconfigure(1, weight=1)
-app.grid_rowconfigure(0, weight=1)
+class DetectorApp(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Farm Sen")
+        self.setFixedSize(730, 550)
+        self.setWindowIcon(QIcon(internal_path("logo.ico")))
+        self.setStyleSheet(QSS)
 
-# === LEFT SIDEBAR ===
-sidebar_frame = ctk.CTkFrame(app, width=260, corner_radius=0, fg_color=SIDEBAR_COLOR)
-sidebar_frame.grid(row=0, column=0, sticky="nsew")
-sidebar_frame.grid_propagate(False)
+        main_widget = QWidget()
+        self.setCentralWidget(main_widget)
+        main_layout = QHBoxLayout(main_widget)
+        main_layout.setContentsMargins(0, 0, 15, 15)
+        main_layout.setSpacing(15)
 
-title_label = ctk.CTkLabel(sidebar_frame, text="⚡ DETECTOR PRO", font=ctk.CTkFont(family="Segoe UI", size=24, weight="bold"), text_color=ACCENT_BLUE)
-title_label.pack(pady=(35, 10))
+        # --- LEFT SIDEBAR ---
+        sidebar = QFrame(); sidebar.setObjectName("Sidebar")
+        sidebar.setFixedWidth(340)
+        left_layout = QVBoxLayout(sidebar)
+        left_layout.setContentsMargins(20, 25, 20, 20)
+        left_layout.setSpacing(15)
 
-info_card = ctk.CTkFrame(sidebar_frame, corner_radius=10, fg_color=CARD_COLOR)
-info_card.pack(padx=20, pady=(10, 20), fill="x")
+        lbl_title = QLabel("Reng Reng"); lbl_title.setObjectName("Title")
+        left_layout.addWidget(lbl_title)
 
-ctk.CTkLabel(info_card, text="🎮 THÔNG TIN GAME", font=ctk.CTkFont(size=11, weight="bold"), text_color="#cbd5e1").pack(pady=(10, 5))
-coord_label = ctk.CTkLabel(info_card, text="X: -- | Y: --\nSize: -- x --", font=ctk.CTkFont(family="Consolas", size=12), text_color=TEXT_COLOR)
-coord_label.pack(pady=(0, 10))
+        # Info Card
+        info_card = QFrame(); info_card.setObjectName("Card")
+        info_layout = QVBoxLayout(info_card)
+        
+        info_header = QLabel("Thông tin Game"); info_header.setObjectName("Muted")
+        info_layout.addWidget(info_header)
 
-settings_frame = ctk.CTkFrame(sidebar_frame, corner_radius=10, fg_color=CARD_COLOR)
-settings_frame.pack(padx=20, pady=(0, 20), fill="both", expand=True)
+        grid = QGridLayout()
+        self.val_x = QLabel("—"); self.val_x.setObjectName("Metric")
+        self.val_y = QLabel("—"); self.val_y.setObjectName("Metric")
+        self.val_w = QLabel("—"); self.val_w.setObjectName("Metric")
+        self.val_h = QLabel("—"); self.val_h.setObjectName("Metric")
 
-wh_lbl = ctk.CTkLabel(settings_frame, text="💬 Discord Webhook:", font=ctk.CTkFont(size=12, weight="bold"), text_color="#cbd5e1")
-wh_lbl.pack(pady=(15, 5), padx=15, anchor="w")
+        lbl_x = QLabel("POS X"); lbl_x.setObjectName("Dim")
+        lbl_y = QLabel("POS Y"); lbl_y.setObjectName("Dim")
+        lbl_w = QLabel("WIDTH"); lbl_w.setObjectName("Dim")
+        lbl_h = QLabel("HEIGHT"); lbl_h.setObjectName("Dim")
 
-webhook_entry = ctk.CTkEntry(settings_frame, height=35, fg_color=BG_COLOR, border_color="#475569", text_color=TEXT_COLOR)
-webhook_entry.insert(0, config.get("webhook", ""))
-webhook_entry.pack(pady=(0, 10), padx=15, fill="x")
+        grid.addWidget(lbl_x, 0, 0); grid.addWidget(self.val_x, 1, 0)
+        grid.addWidget(lbl_y, 0, 1); grid.addWidget(self.val_y, 1, 1)
+        grid.addWidget(lbl_w, 2, 0); grid.addWidget(self.val_w, 3, 0)
+        grid.addWidget(lbl_h, 2, 1); grid.addWidget(self.val_h, 3, 1)
+        info_layout.addLayout(grid)
+        left_layout.addWidget(info_card)
 
-# --- HAI NÚT TEST NẰM NGANG ---
-test_btn_frame = ctk.CTkFrame(settings_frame, fg_color="transparent")
-test_btn_frame.pack(pady=(0, 15), padx=15, fill="x")
-test_btn_frame.grid_columnconfigure(0, weight=1)
-test_btn_frame.grid_columnconfigure(1, weight=1)
+        # Config Card
+        cfg_card = QFrame(); cfg_card.setObjectName("Card")
+        cfg_layout = QVBoxLayout(cfg_card)
+        cfg_header = QLabel("Cấu hình"); cfg_header.setObjectName("Muted")
+        cfg_layout.addWidget(cfg_header)
 
-test_wh_btn = ctk.CTkButton(test_btn_frame, text="🌐 Test Webhook", font=ctk.CTkFont(weight="bold"), fg_color="#475569", hover_color="#64748b", command=test_webhook)
-test_wh_btn.grid(row=0, column=0, padx=(0, 5), sticky="ew")
+        self.webhook_input = QLineEdit()
+        self.webhook_input.setPlaceholderText("Discord Webhook URL...")
+        self.webhook_input.setText(config.get("webhook", ""))
+        self.webhook_input.textChanged.connect(self.save_ui_config)
+        cfg_layout.addWidget(self.webhook_input)
 
-test_sound_btn = ctk.CTkButton(test_btn_frame, text="🎵 Thử Âm Thanh", font=ctk.CTkFont(weight="bold"), fg_color="#475569", hover_color="#64748b", command=toggle_sound)
-test_sound_btn.grid(row=0, column=1, padx=(5, 0), sticky="ew")
-# ------------------------------
+        btn_row = QHBoxLayout()
+        btn_wh = QPushButton("Test Webhook")
+        btn_wh.clicked.connect(self.do_test_webhook)
+        self.btn_sound = QPushButton(" Thử âm thanh")
+        self.btn_sound.setIcon(qta.icon('fa5s.volume-up', color='#e6e8eb'))
+        self.btn_sound.clicked.connect(self.do_test_sound)
+        btn_row.addWidget(btn_wh); btn_row.addWidget(self.btn_sound)
+        cfg_layout.addLayout(btn_row)
 
-sound_switch_var = ctk.IntVar(value=1 if config.get("play_sound", True) else 0)
-sound_switch = ctk.CTkSwitch(settings_frame, text="🔊 Bật báo động", 
-                             variable=sound_switch_var, 
-                             font=ctk.CTkFont(weight="bold", size=12),
-                             progress_color=ACCENT_BLUE,
-                             command=save_config)
-sound_switch.pack(pady=(5, 5), padx=15, anchor="w")
+        alert_row = QHBoxLayout()
+        alert_lbl = QLabel("Bật báo động")
+        alert_lbl.setStyleSheet("font-size: 12px; font-weight: bold; color: #e6e8eb;")
+        
+        self.chk_alert = ToggleSwitch() 
+        self.chk_alert.setChecked(config.get("play_sound", True))
+        self.chk_alert.stateChanged.connect(self.save_ui_config)
+        
+        alert_row.addWidget(alert_lbl)
+        alert_row.addStretch() # Đẩy nút trượt sang mép phải cho đẹp
+        alert_row.addWidget(self.chk_alert)
+        cfg_layout.addLayout(alert_row)
 
-def set_volume(value):
-    pygame.mixer.music.set_volume(value)
+        vol_row = QHBoxLayout()
+        vol_lbl = QLabel("VOLUME"); vol_lbl.setObjectName("Dim")
+        self.vol_val = QLabel(f"{int(config.get('sound_volume', 50))}%"); self.vol_val.setStyleSheet("color: #22d3ee; font-weight: bold; font-family: Consolas;")
+        vol_row.addWidget(vol_lbl); vol_row.addWidget(self.vol_val, alignment=Qt.AlignmentFlag.AlignRight)
+        cfg_layout.addLayout(vol_row)
 
-volume_slider = ctk.CTkSlider(settings_frame, from_=0.0, to=1.0, command=set_volume, progress_color=ACCENT_BLUE, button_color=ACCENT_BLUE)
-volume_slider.set(config.get("sound_volume", 0.5))
-volume_slider.bind("<ButtonRelease-1>", save_config) 
-volume_slider.pack(pady=(0, 15), padx=15, fill="x")
+        self.slider = QSlider(Qt.Orientation.Horizontal)
+        self.slider.setRange(0, 100)
+        self.slider.setValue(int(config.get("sound_volume", 50)))
+        self.slider.valueChanged.connect(self.on_volume_change)
+        cfg_layout.addWidget(self.slider)
 
-start_btn = ctk.CTkButton(sidebar_frame, text="▶ BẮT ĐẦU AUTO", fg_color=ACCENT_GREEN, hover_color="#059669", text_color="#ffffff", font=ctk.CTkFont(weight="bold", size=14), height=45, corner_radius=8, command=start_scan)
-start_btn.pack(pady=(10, 10), padx=20, fill="x")
+        left_layout.addWidget(cfg_card)
+        left_layout.addStretch()
 
-stop_btn = ctk.CTkButton(sidebar_frame, text="⏹ DỪNG LẠI (F8)", fg_color=ACCENT_RED, hover_color="#be123c", text_color="#ffffff", font=ctk.CTkFont(weight="bold", size=14), height=45, corner_radius=8, command=stop_scan)
-stop_btn.pack(pady=(0, 30), padx=20, fill="x")
+        # Xóa icon text đi, thêm dấu cách cho chữ đỡ dính vào icon
+        btn_start = QPushButton(" BẮT ĐẦU AUTO (F7)"); btn_start.setObjectName("BtnStart"); btn_start.setFixedHeight(45)
+        btn_start.setIcon(qta.icon('fa5s.play', color='white')) 
+        btn_start.clicked.connect(lambda: c.trigger_start.emit())
 
-# === MAIN WORK AREA ===
-main_frame = ctk.CTkFrame(app, fg_color="transparent")
-main_frame.grid(row=0, column=1, sticky="nsew", padx=25, pady=25)
-main_frame.grid_columnconfigure(0, weight=1)
-main_frame.grid_rowconfigure(1, weight=1)
+        btn_stop = QPushButton(" DỪNG LẠI (F8)"); btn_stop.setObjectName("BtnStop"); btn_stop.setFixedHeight(45)
+        btn_stop.setIcon(qta.icon('fa5s.stop', color='white'))
+        btn_stop.clicked.connect(lambda: c.trigger_stop.emit())
 
-status_panel = ctk.CTkFrame(main_frame, height=100, corner_radius=12, fg_color=SIDEBAR_COLOR, border_width=1, border_color="#334155")
-status_panel.grid(row=0, column=0, sticky="ew", pady=(0, 20))
-status_panel.grid_propagate(False)
+        left_layout.addWidget(btn_start); left_layout.addWidget(btn_stop)
 
-status_indicator = ctk.CTkLabel(status_panel, text="🔵 HỆ THỐNG SẴN SÀNG", font=ctk.CTkFont(family="Segoe UI", size=22, weight="bold"), text_color=TEXT_COLOR)
-status_indicator.place(relx=0.5, rely=0.5, anchor="center")
+        # --- RIGHT PANEL ---
+        right_layout = QVBoxLayout()
+        right_layout.setContentsMargins(10, 15, 0, 0)
+        right_layout.setSpacing(15)
 
-log_panel = ctk.CTkFrame(main_frame, corner_radius=12, fg_color=SIDEBAR_COLOR, border_width=1, border_color="#334155")
-log_panel.grid(row=1, column=0, sticky="nsew")
+        status_card = QFrame(); status_card.setObjectName("Card"); status_card.setFixedHeight(85)
+        st_layout = QHBoxLayout(status_card)
+        
+        st_info = QVBoxLayout()
+        lbl_st = QLabel("SYSTEM STATUS"); lbl_st.setObjectName("Dim")
+        
+        # Tạo một hàng ngang để chứa Icon và Chữ đứng cạnh nhau
+        st_row = QHBoxLayout()
+        st_row.setSpacing(8) # Khoảng cách giữa chấm tròn và chữ
+        
+        # Tạo nhãn chứa Icon FontAwesome (Chấm tròn màu xám mặc định)
+        self.st_icon = QLabel()
+        self.st_icon.setPixmap(qta.icon('fa5s.circle', color='#8a9199').pixmap(14, 14))
+        
+        self.st_title = QLabel("Hệ thống sẵn sàng"); self.st_title.setObjectName("Metric")
+        
+        st_row.addWidget(self.st_icon)
+        st_row.addWidget(self.st_title)
+        st_row.addStretch() # Đẩy chúng sang mép trái
+        
+        st_info.addWidget(lbl_st); st_info.addLayout(st_row)
 
-log_header = ctk.CTkFrame(log_panel, height=40, corner_radius=12, fg_color=CARD_COLOR)
-log_header.pack(fill="x", padx=2, pady=2)
-log_header.pack_propagate(False)
+        st_uptime = QVBoxLayout()
+        lbl_up = QLabel("UPTIME"); lbl_up.setObjectName("Dim")
+        self.up_val = QLabel("00:00:00"); self.up_val.setObjectName("Metric")
+        st_uptime.addWidget(lbl_up); st_uptime.addWidget(self.up_val)
 
-log_title = ctk.CTkLabel(log_header, text="📡 TERMINAL LOGS", font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"), text_color="#cbd5e1")
-log_title.pack(side="left", padx=15)
+        st_layout.addLayout(st_info); st_layout.addStretch(); st_layout.addLayout(st_uptime)
+        right_layout.addWidget(status_card)
 
-log_box = ctk.CTkTextbox(log_panel, fg_color=TERMINAL_BG, text_color=TERMINAL_TEXT, font=ctk.CTkFont(family="Consolas", size=13), corner_radius=0, border_width=0)
-log_box.pack(fill="both", expand=True, padx=2, pady=(0, 2))
+        term_card = QFrame(); term_card.setObjectName("Card")
+        term_layout = QVBoxLayout(term_card); term_layout.setContentsMargins(0, 0, 0, 0)
 
-log_box.tag_config("time", foreground="#64748b")
-log_box.tag_config("msg", foreground=TERMINAL_TEXT)
-log_box.configure(state="disabled")
+        term_header = QFrame(); term_header.setObjectName("Header"); term_header.setFixedHeight(35)
+        th_layout = QHBoxLayout(term_header); th_layout.setContentsMargins(15, 0, 15, 0)
+        lbl_term = QLabel(">_ TERMINAL LOGS"); lbl_term.setObjectName("Muted")
+        th_layout.addWidget(lbl_term)
 
-add_log("Hệ thống khởi động thành công.")
-add_log("Đang chờ lệnh từ người dùng...")
-keyboard.add_hotkey("F8", stop_scan)
+        self.text_box = QTextEdit(); self.text_box.setReadOnly(True); self.text_box.setContentsMargins(10, 10, 10, 10)
+        term_layout.addWidget(term_header); term_layout.addWidget(self.text_box)
 
-app.mainloop()
+        right_layout.addWidget(term_card)
+
+        main_layout.addWidget(sidebar)
+        main_layout.addLayout(right_layout)
+
+        # Timers
+        self.timer = QTimer()
+        self.timer.timeout.connect(self.update_uptime_tick)
+        self.timer.start(1000)
+
+        # Signals
+        c.log.connect(self.append_log)
+        c.status.connect(self.update_status_ui)
+        c.telemetry.connect(self.update_telemetry_ui)
+        c.sound_btn.connect(self.update_sound_btn_ui)
+        c.trigger_start.connect(start_scan)
+        c.trigger_stop.connect(stop_scan)
+
+        # Hooks
+        keyboard.on_press_key("F7", lambda _: c.trigger_start.emit())
+        keyboard.on_press_key("F8", lambda _: c.trigger_stop.emit())
+
+        add_log("System started.", "SYS")
+        add_log("Press F7 to Start, F8 to Stop.", "INFO")
+
+    def save_ui_config(self):
+        config["webhook"] = self.webhook_input.text()
+        config["play_sound"] = self.chk_alert.isChecked()
+        config["sound_volume"] = self.slider.value()
+        config_mgr.save_config(config) 
+
+    def on_volume_change(self, val):
+        self.vol_val.setText(f"{val}%")
+        self.save_ui_config()
+
+    def do_test_webhook(self):
+        self.save_ui_config()
+        test_webhook()
+
+    def do_test_sound(self):
+        self.save_ui_config()
+        toggle_sound()
+
+    def append_log(self, level, msg):
+        colors = {"INFO": "#22d3ee", "OK": "#10b981", "WARN": "#f59e0b", "ERR": "#ef4444", "SYS": "#8a9199", "ALERT": "#ff004f" }
+        c_hex = colors.get(level, "#8a9199")
+        t = time.strftime("%H:%M:%S")
+        html = f'<span style="color:#5a6069;">{t}</span> <span style="color:{c_hex}; font-weight:bold;">[{level}]</span> <span style="color:#e6e8eb;">{msg}</span>'
+        self.text_box.append(html)
+
+    def update_status_ui(self, title, color_hex, mode, mode_color):
+        self.st_title.setText(title)
+        self.st_title.setStyleSheet(f"color: {color_hex}; font-size: 16px; font-weight: bold;")
+        
+        # Cập nhật màu của chấm tròn FontAwesome theo đúng màu của chữ
+        self.st_icon.setPixmap(qta.icon('fa5s.circle', color=color_hex).pixmap(14, 14))
+        
+        if not running:
+            self.val_x.setText("—"); self.val_y.setText("—")
+            self.val_w.setText("—"); self.val_h.setText("—")
+
+    def update_telemetry_ui(self, x, y, w, h):
+        self.val_x.setText(str(x)); self.val_y.setText(str(y))
+        self.val_w.setText(str(w)); self.val_h.setText(str(h))
+
+    def update_sound_btn_ui(self, is_playing):
+        if is_playing:
+            self.btn_sound.setText(" Tắt Âm Thanh")
+            self.btn_sound.setIcon(qta.icon('fa5s.volume-mute', color='#ef4444')) # <--- Icon Loa tắt màu đỏ
+            self.btn_sound.setStyleSheet("color: #ef4444; border: 1px solid #ef4444;")
+        else:
+            self.btn_sound.setText(" Thử âm thanh")
+            self.btn_sound.setIcon(qta.icon('fa5s.volume-up', color='#e6e8eb')) # <--- Icon Loa bật màu trắng
+            self.btn_sound.setStyleSheet("color: #e6e8eb; border: 1px solid #1f242b;")
+
+    def update_uptime_tick(self):
+        if running and start_time:
+            secs = int(time.time() - start_time)
+            self.up_val.setText(f"{secs//3600:02d}:{(secs%3600)//60:02d}:{secs%60:02d}")
+        else: self.up_val.setText("00:00:00")
+
+    def closeEvent(self, event):
+        global running
+        running = False
+        event.accept()
+
+if __name__ == "__main__":
+    app = QApplication(sys.argv)
+    window = DetectorApp()
+    window.show()
+    sys.exit(app.exec())
